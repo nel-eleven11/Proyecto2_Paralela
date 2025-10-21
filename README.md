@@ -16,15 +16,17 @@ bruteforce.c:
 
 ```bash
 # Compile with MPI and OpenSSL
-mpicc bruteforce.c -o program -lssl -lcrypto
+mpicc -O3 -std=c11 bruteforce.c -lcrypto -o bruteforce
 ```
 
 ```bash
 # Run with 4 processes
-mpirun -np 4 ./program
+mpirun -np 4 ./bruteforce
 ```
 
 ```bash
 # Run with 8 processes
-mpirun -np 8 ./program
+mpirun -np 8 ./bruteforce
 ```
+
+---
