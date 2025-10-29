@@ -143,6 +143,10 @@ int main(int argc, char *argv[]){
     unsigned char *cipher = NULL; int ciphlen = 0;
     const char *arg_search = NULL;
 
+    // Configuración del espacio de búsqueda
+    int search_bits = 24;     // Bits del espacio de búsqueda (default: 24 bits)
+    int upper_specified = 0;  // Indica si -U fue especificado manualmente
+
     // Modo cifrado
     int encrypt_mode = 0;
     const char *input_file = NULL;
@@ -167,11 +171,23 @@ int main(int argc, char *argv[]){
             lower = strtoull(argv[++i], NULL, 0);
         } else if (!strcmp(argv[i], "-U") && i+1<argc){
             upper = strtoull(argv[++i], NULL, 0);
+            upper_specified = 1;
         } else if (!strcmp(argv[i], "-s") && i+1<argc){
             arg_search = argv[++i];
-        }     
+        } else if (!strcmp(argv[i], "-b") && i+1<argc){
+            search_bits = atoi(argv[++i]);
+            if (search_bits < 1 || search_bits > 56) {
+                fprintf(stderr, "ERROR: -b debe estar entre 1 y 56 bits\n");
+                return 1;
+            }
+        }
     }
     if (arg_search) search = arg_search;
+
+    // Si no se especificó -U manualmente, usar 2^search_bits
+    if (!upper_specified) {
+        upper = (1ULL << search_bits);
+    }
 
     MPI_Init(NULL, NULL);
     MPI_Comm comm = MPI_COMM_WORLD;
