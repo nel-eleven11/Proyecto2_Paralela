@@ -135,41 +135,6 @@ static int write_file(const char *path, const unsigned char *buf, int len) {
     return 0;
 }
 
-// muestra banner informativo al inicio
-static void banner(void){
-    puts("============================================================");
-    puts("  BruteDES MPI - Dynamic Scheduler (RMA + Chunks)");
-    puts("  Distribucion dinamica con contador global");
-    puts("  Optimizado para balance de carga y terminacion temprana");
-    puts("============================================================\n");
-}
-
-// imprime uso y notas de ejecucion
-static void usage(const char *p){
-    banner();
-    fprintf(stderr,
-      "USO:\n"
-      "  MODO CIFRADO:\n"
-      "    mpirun -np <P> %s -e -i <input.txt> -o <output.bin> -k <key>\n"
-      "  MODO DESCIFRADO/BRUTEFORCE:\n"
-      "    mpirun -np <P> %s [-c cipher.bin] [-L low] [-U up] [-s substring] [-B chunk_size]\n"
-      "OPCIONES:\n"
-      "  -e           : Modo cifrado\n"
-      "  -i <archivo> : Archivo de texto de entrada (modo cifrado)\n"
-      "  -o <archivo> : Archivo binario de salida (modo cifrado)\n"
-      "  -k <llave>   : Llave para cifrar (número entero)\n"
-      "  -c <archivo> : Archivo cifrado para descifrar\n"
-      "  -L <num>     : Límite inferior del rango de búsqueda\n"
-      "  -U <num>     : Límite superior del rango de búsqueda\n"
-      "  -s <texto>   : Subcadena a buscar en el texto descifrado\n"
-      "  -B <num>     : Tamaño del chunk para planificación dinámica\n"
-      "NOTAS:\n"
-      "  - Si no pasas -c, usa el cifrado embebido (16 bytes).\n"
-      "  - Búsqueda por defecto: \" the \". Cambia con -s \"texto\".\n"
-      "  - Rango por defecto: [0, 2^24).\n"
-      "  - Chunk size por defecto: 2^16 = 65536. Ajusta con -B.\n", p, p);
-}
-
 // bucle principal
 int main(int argc, char *argv[]){
     int N, id;
@@ -206,9 +171,7 @@ int main(int argc, char *argv[]){
             arg_search = argv[++i];
         } else if (!strcmp(argv[i], "-B") && i+1<argc){
             chunk_size = strtoull(argv[++i], NULL, 0);
-        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")){
-            usage(argv[0]); return 0;
-        }
+        } 
     }
     if (arg_search) search = arg_search;
 
@@ -223,14 +186,12 @@ int main(int argc, char *argv[]){
         if (!input_file || !output_file) {
             if (id == 0) {
                 fprintf(stderr, "ERROR: Modo cifrado requiere -i <input> y -o <output>\n");
-                usage(argv[0]);
             }
             MPI_Finalize();
             return 1;
         }
 
         if (id == 0) {
-            banner();
             printf("MODO CIFRADO\n");
             printf("  Archivo entrada : %s\n", input_file);
             printf("  Archivo salida  : %s\n", output_file);
@@ -287,7 +248,6 @@ int main(int argc, char *argv[]){
         return 3;
     }
 
-    if (id==0) banner();
 
     // --- DYNAMIC SCHEDULER WITH RMA ---
     // Create MPI_Win with global counter for next_key
