@@ -35,6 +35,11 @@ mpicc -std=c11 -O3 -Wall -Wextra -pedantic bruteforce.c -lcrypto -o bruteforce
 mpicc -std=c11 -O3 -Wall -Wextra -pedantic paralelo_1.c -lcrypto -o paralelo_1
 ```
 
+```bash
+# Compilar con MPI y OpenSSL
+mpicc -std=c11 -O3 -Wall -Wextra -pedantic paralelo_2.c -lcrypto -o paralelo_2
+```
+
 ## Ejecución
 
 ### Modo 1: Cifrado de Archivos
@@ -47,6 +52,9 @@ mpirun -np 1 ./bruteforce -e -i mensaje.txt -o cifrado.bin -k 123456
 
 # Con paralelo_1 (planificador dinámico)
 mpirun -np 1 ./paralelo_1 -e -i mensaje.txt -o cifrado.bin -k 123456
+
+#Con paralelo_2 
+mpirun -np 1 ./paralelo_2 -e -i mensaje.txt -o cifrado.bin -k 123456
 ```
 
 **Parámetros:**
@@ -77,6 +85,15 @@ mpirun -np 4 --mca osc ^ucx ./paralelo_1
 
 # Con archivo cifrado personalizado y chunk personalizado
 mpirun -np 8 --mca osc ^ucx ./paralelo_1 -c cifrado.bin -L 0 -U 16777216 -s "texto" -B 65536
+```
+
+#### paralelo_2.c
+```bash
+# Con cifrado embebido por defecto
+mpirun -np 4 --mca osc ^ucx ./paralelo_2
+
+# Con archivo cifrado personalizado y chunk personalizado
+mpirun -np 8 --mca osc ^ucx ./paralelo_2 -c cifrado.bin -L 0 -U 16777216 -s "texto" -B 65536
 ```
 
 **Parámetros:**
