@@ -9,6 +9,13 @@
 - Joaquín Puente 22296
 
 ---
+## Reporte del Proyecto:
+
+```
+https://uvggt-my.sharepoint.com/:w:/r/personal/gar22434_uvg_edu_gt/Documents/Proyecto%202%20Paralela.docx?d=w71cd1c17acea47cd9f756227f4592fef&csf=1&web=1&e=RkroSI
+```
+
+---
 
 # Compilar/Correr
 
