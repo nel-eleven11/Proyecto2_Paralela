@@ -12,21 +12,87 @@
 
 # Compilar/Correr
 
-bruteforce.c:
+## Compilación
+
+### bruteforce.c (Planificador Estático)
 
 ```bash
-# Compile with MPI and OpenSSL
-mpicc -O3 -std=c11 bruteforce.c -lcrypto -o bruteforce
+# Compilar con MPI y OpenSSL
+mpicc -std=c11 -O3 -Wall -Wextra -pedantic bruteforce.c -lcrypto -o bruteforce
 ```
 
+### paralelo_1.c (Planificador Dinámico con RMA + Chunks)
+
 ```bash
-# Run with 4 processes
+# Compilar con MPI y OpenSSL
+mpicc -std=c11 -O3 -Wall -Wextra -pedantic paralelo_1.c -lcrypto -o paralelo_1
+```
+
+## Ejecución
+
+### Modo 1: Cifrado de Archivos
+
+Cifra un archivo de texto usando una llave privada:
+
+```bash
+# Con bruteforce (planificador estático)
+mpirun -np 1 ./bruteforce -e -i mensaje.txt -o cifrado.bin -k 123456
+
+# Con paralelo_1 (planificador dinámico)
+mpirun -np 1 ./paralelo_1 -e -i mensaje.txt -o cifrado.bin -k 123456
+```
+
+**Parámetros:**
+- `-e` : Activa el modo cifrado
+- `-i <archivo>` : Archivo de texto de entrada
+- `-o <archivo>` : Archivo binario de salida (cifrado)
+- `-k <número>` : Llave numérica para cifrar
+
+### Modo 2: Descifrado / Bruteforce
+
+Encuentra la llave mediante fuerza bruta:
+
+#### bruteforce.c (Planificador Estático)
+
+```bash
+# Con cifrado embebido por defecto
 mpirun -np 4 ./bruteforce
+
+# Con archivo cifrado personalizado
+mpirun -np 8 ./bruteforce -c cifrado.bin -L 0 -U 16777216 -s "texto"
 ```
 
+#### paralelo_1.c (Planificador Dinámico - Recomendado)
+
 ```bash
-# Run with 8 processes
-mpirun -np 8 ./bruteforce
+# Con cifrado embebido por defecto
+mpirun -np 4 --mca osc ^ucx ./paralelo_1
+
+# Con archivo cifrado personalizado y chunk personalizado
+mpirun -np 8 --mca osc ^ucx ./paralelo_1 -c cifrado.bin -L 0 -U 16777216 -s "texto" -B 65536
+```
+
+**Parámetros:**
+- `-c <archivo>` : Archivo cifrado para descifrar
+- `-L <número>` : Límite inferior del rango de búsqueda (default: 0)
+- `-U <número>` : Límite superior del rango de búsqueda (default: 2^24)
+- `-s <texto>` : Subcadena a buscar en el texto descifrado (default: " the ")
+- `-B <número>` : Tamaño del chunk (solo paralelo_1, default: 65536)
+
+**Nota:** `--mca osc ^ucx` suprime advertencias de MPI UCX (opcional).
+
+### Ejemplos Completos
+
+```bash
+# 1. Cifrar un archivo
+echo "Save the planet and protect our environment!" > mensaje.txt
+mpirun -np 1 ./paralelo_1 -e -i mensaje.txt -o secreto.bin -k 999999
+
+# 2. Encontrar la llave con bruteforce dinámico
+mpirun -np 4 --mca osc ^ucx ./paralelo_1 -c secreto.bin -L 990000 -U 1000000 -s "planet"
+
+# 3. Comparar con bruteforce estático
+mpirun -np 4 ./bruteforce -c secreto.bin -L 990000 -U 1000000 -s "planet"
 ```
 
 ---
