@@ -139,12 +139,13 @@ typedef struct {
 
 int main(int argc, char *argv[]){
     int N, id;
+    int search_bits = 24;
     uint64_t upper = (1ULL<<24), lower = 0;
+    int upper_specified = 0;
     unsigned char *cipher = NULL; int ciphlen = 0;
     const char *arg_search = NULL;
-    uint64_t chunk_size = (1ULL << 16); // Tamaño inicial de chunk
-    int steal_enabled = 1; // Habilitar work stealing
-    int steal_threshold = 10; // Porcentaje de trabajo restante para empezar a robar
+    uint64_t chunk_size = (1ULL << 16);
+    int steal_enabled = 1;
 
     // Modo cifrado
     int encrypt_mode = 0;
@@ -170,15 +171,26 @@ int main(int argc, char *argv[]){
             lower = strtoull(argv[++i], NULL, 0);
         } else if (!strcmp(argv[i], "-U") && i+1<argc){
             upper = strtoull(argv[++i], NULL, 0);
+            upper_specified = 1;
         } else if (!strcmp(argv[i], "-s") && i+1<argc){
             arg_search = argv[++i];
         } else if (!strcmp(argv[i], "-B") && i+1<argc){
             chunk_size = strtoull(argv[++i], NULL, 0);
+        } else if (!strcmp(argv[i], "-b") && i+1<argc){
+            search_bits = atoi(argv[++i]);
+            if (search_bits < 1 || search_bits > 56) {
+                fprintf(stderr, "ERROR: -b debe estar entre 1 y 56 bits\n");
+                return 1;
+            }
         } else if (!strcmp(argv[i], "--no-steal")){
             steal_enabled = 0;
         }
     }
     if (arg_search) search = arg_search;
+
+    if (!upper_specified) {
+        upper = (1ULL << search_bits);
+    }
 
     MPI_Init(NULL, NULL);
     MPI_Comm comm = MPI_COMM_WORLD;
@@ -287,45 +299,39 @@ int main(int argc, char *argv[]){
         current_pos = chunk_end;
     }
     
-    // Comunicación para terminación temprana
     MPI_Request term_req;
     MPI_Irecv(&found, 1, MPI_UINT64_T, MPI_ANY_SOURCE, TAG_FOUND_KEY, comm, &term_req);
-    
-    // Sincronizar inicio
+
     MPI_Barrier(comm);
     double t0 = MPI_Wtime();
-    
-    // Bucle principal de work stealing
+
     int idle = 0;
-    int termination_sent = 0;
-    
+    int failed_steal_attempts = 0;
+    int max_failed_attempts = N * 2;
+
     while (status_code == 0) {
-        // Procesar chunk local si hay trabajo
         if (queue_size > 0) {
             idle = 0;
-            
-            // Tomar chunk de la cola
+            failed_steal_attempts = 0;
+
             work_chunk current = local_queue[queue_front];
             queue_front = (queue_front + 1) % MAX_LOCAL_QUEUE;
             queue_size--;
-            
-            // Procesar el chunk
+
             for (uint64_t k = current.start; k < current.end && status_code == 0; ++k) {
-                // Verificar si alguien ya encontró la llave
                 int term_flag = 0;
                 MPI_Test(&term_req, &term_flag, MPI_STATUS_IGNORE);
                 if (term_flag) {
-                    status_code = 1; // Terminado por señal
+                    status_code = 1;
                     break;
                 }
-                
+
                 local_tests++;
                 if (tryKey((long)k, (char*)cipher, ciphlen)) {
                     found = k;
-                    status_code = 2; // Encontrado
+                    status_code = 2;
                     found_rank = id;
-                    
-                    // Notificar a todos los procesos
+
                     for (int p = 0; p < N; ++p) {
                         if (p != id) {
                             MPI_Send(&found, 1, MPI_UINT64_T, p, TAG_FOUND_KEY, comm);
@@ -334,39 +340,34 @@ int main(int argc, char *argv[]){
                     break;
                 }
             }
-            
-            // Si nos quedamos con poco trabajo, intentar robar
+
             if (steal_enabled && queue_size <= 1 && status_code == 0) {
-                // Enviar solicitudes de trabajo a procesos aleatorios
                 for (int attempt = 0; attempt < N/2 && queue_size < MAX_LOCAL_QUEUE/2; attempt++) {
-                    int target = (id + 1 + attempt) % N; // Simple round-robin
+                    int target = (id + 1 + attempt) % N;
                     if (target == id) continue;
-                    
+
                     MPI_Send(&id, 1, MPI_INT, target, TAG_WORK_REQUEST, comm);
-                    
-                    // Esperar respuesta con timeout
+
                     MPI_Request steal_req;
                     work_chunk stolen_chunk;
                     int got_work = 0;
-                    
-                    MPI_Irecv(&stolen_chunk, sizeof(work_chunk), MPI_BYTE, 
+
+                    MPI_Irecv(&stolen_chunk, sizeof(work_chunk), MPI_BYTE,
                              target, TAG_WORK_CHUNK, comm, &steal_req);
-                    
-                    // Esperar un tiempo corto por respuesta
+
                     MPI_Status steal_status;
                     int steal_completed = 0;
                     MPI_Test(&steal_req, &steal_completed, &steal_status);
-                    
+
                     if (!steal_completed) {
                         double start_wait = MPI_Wtime();
-                        while (MPI_Wtime() - start_wait < 0.001) { // Timeout de 1ms
+                        while (MPI_Wtime() - start_wait < 0.001) {
                             MPI_Test(&steal_req, &steal_completed, &steal_status);
                             if (steal_completed) break;
                         }
                     }
-                    
+
                     if (steal_completed) {
-                        // Verificar si es chunk válido
                         if (stolen_chunk.start < stolen_chunk.end) {
                             local_queue[queue_back] = stolen_chunk;
                             queue_back = (queue_back + 1) % MAX_LOCAL_QUEUE;
@@ -377,98 +378,96 @@ int main(int argc, char *argv[]){
                         MPI_Cancel(&steal_req);
                         MPI_Wait(&steal_req, MPI_STATUS_IGNORE);
                     }
-                    
+
                     if (got_work) break;
                 }
             }
         } else {
-            // Sin trabajo local - modo idle
             if (!idle) {
                 idle = 1;
-                // Intentar robar trabajo inmediatamente
-                for (int attempt = 0; attempt < N && queue_size == 0; attempt++) {
-                    int target = (id + attempt) % N;
-                    if (target == id) continue;
-                    
-                    MPI_Send(&id, 1, MPI_INT, target, TAG_WORK_REQUEST, comm);
-                    
-                    MPI_Request steal_req;
-                    work_chunk stolen_chunk;
-                    MPI_Irecv(&stolen_chunk, sizeof(work_chunk), MPI_BYTE, 
-                             target, TAG_WORK_CHUNK, comm, &steal_req);
-                    
-                    MPI_Status steal_status;
-                    int steal_completed;
-                    MPI_Wait(&steal_req, &steal_status);
-                    
-                    if (stolen_chunk.start < stolen_chunk.end) {
-                        local_queue[queue_back] = stolen_chunk;
-                        queue_back = (queue_back + 1) % MAX_LOCAL_QUEUE;
-                        queue_size++;
-                        break;
-                    }
+            }
+
+            int got_work = 0;
+            for (int attempt = 0; attempt < N && queue_size == 0 && !got_work; attempt++) {
+                int target = (id + attempt) % N;
+                if (target == id) continue;
+
+                MPI_Send(&id, 1, MPI_INT, target, TAG_WORK_REQUEST, comm);
+
+                MPI_Request steal_req;
+                work_chunk stolen_chunk;
+                MPI_Irecv(&stolen_chunk, sizeof(work_chunk), MPI_BYTE,
+                         target, TAG_WORK_CHUNK, comm, &steal_req);
+
+                MPI_Status steal_status;
+                MPI_Wait(&steal_req, &steal_status);
+
+                if (stolen_chunk.start < stolen_chunk.end) {
+                    local_queue[queue_back] = stolen_chunk;
+                    queue_back = (queue_back + 1) % MAX_LOCAL_QUEUE;
+                    queue_size++;
+                    got_work = 1;
+                    failed_steal_attempts = 0;
                 }
             }
-            
-            // Si todavía no hay trabajo, verificar terminación
+
+            if (!got_work) {
+                failed_steal_attempts++;
+            }
+
             if (queue_size == 0) {
-                // Verificar mensajes entrantes
                 MPI_Status status;
                 int msg_available;
                 MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, comm, &msg_available, &status);
-                
+
                 if (msg_available) {
                     if (status.MPI_TAG == TAG_WORK_REQUEST) {
-                        // Alguien nos pide trabajo - responder aunque no tengamos
                         int requester;
-                        MPI_Recv(&requester, 1, MPI_INT, status.MPI_SOURCE, 
+                        MPI_Recv(&requester, 1, MPI_INT, status.MPI_SOURCE,
                                 TAG_WORK_REQUEST, comm, MPI_STATUS_IGNORE);
-                        
+
                         work_chunk empty_chunk = {0, 0};
-                        MPI_Send(&empty_chunk, sizeof(work_chunk), MPI_BYTE, 
+                        MPI_Send(&empty_chunk, sizeof(work_chunk), MPI_BYTE,
                                 requester, TAG_WORK_CHUNK, comm);
                     } else if (status.MPI_TAG == TAG_FOUND_KEY) {
                         uint64_t temp_found;
-                        MPI_Recv(&temp_found, 1, MPI_UINT64_T, status.MPI_SOURCE, 
+                        MPI_Recv(&temp_found, 1, MPI_UINT64_T, status.MPI_SOURCE,
                                 TAG_FOUND_KEY, comm, MPI_STATUS_IGNORE);
                         status_code = 1;
                     }
                 } else {
-                    // No hay mensajes y no hay trabajo - posible terminación
-                    int all_idle;
-                    int local_idle = (queue_size == 0) ? 1 : 0;
-                    MPI_Allreduce(&local_idle, &all_idle, 1, MPI_INT, MPI_LAND, comm);
-                    
-                    if (all_idle && !termination_sent) {
-                        status_code = 1;
-                        termination_sent = 1;
+                    failed_steal_attempts++;
+                    if (failed_steal_attempts >= max_failed_attempts) {
+                        status_code = 0;
+                        break;
+                    }
+                    double wait_start = MPI_Wtime();
+                    while (MPI_Wtime() - wait_start < 0.0001) {
                     }
                 }
             }
         }
-        
-        // Manejar solicitudes de trabajo de otros procesos
+
         MPI_Status req_status;
         int req_available;
         MPI_Iprobe(MPI_ANY_SOURCE, TAG_WORK_REQUEST, comm, &req_available, &req_status);
-        
-        if (req_available && queue_size > 1) { // Solo dar trabajo si tenemos suficiente
+
+        if (req_available && queue_size > 1) {
             int requester;
-            MPI_Recv(&requester, 1, MPI_INT, req_status.MPI_SOURCE, 
+            MPI_Recv(&requester, 1, MPI_INT, req_status.MPI_SOURCE,
                     TAG_WORK_REQUEST, comm, MPI_STATUS_IGNORE);
-            
-            // Dar la mitad de nuestro trabajo
+
             int chunks_to_give = queue_size / 2;
             if (chunks_to_give > 0) {
                 work_chunk chunk_to_send = local_queue[queue_front];
                 queue_front = (queue_front + 1) % MAX_LOCAL_QUEUE;
                 queue_size--;
-                
-                MPI_Send(&chunk_to_send, sizeof(work_chunk), MPI_BYTE, 
+
+                MPI_Send(&chunk_to_send, sizeof(work_chunk), MPI_BYTE,
                         requester, TAG_WORK_CHUNK, comm);
             } else {
                 work_chunk empty_chunk = {0, 0};
-                MPI_Send(&empty_chunk, sizeof(work_chunk), MPI_BYTE, 
+                MPI_Send(&empty_chunk, sizeof(work_chunk), MPI_BYTE,
                         requester, TAG_WORK_CHUNK, comm);
             }
         }
@@ -476,10 +475,13 @@ int main(int argc, char *argv[]){
     
     double t1 = MPI_Wtime();
     double local_time = t1 - t0;
-    
-    // Limpiar comunicación
-    MPI_Cancel(&term_req);
-    MPI_Wait(&term_req, MPI_STATUS_IGNORE);
+
+    int term_completed = 0;
+    MPI_Test(&term_req, &term_completed, MPI_STATUS_IGNORE);
+    if (!term_completed) {
+        MPI_Cancel(&term_req);
+        MPI_Wait(&term_req, MPI_STATUS_IGNORE);
+    }
     
     // Recopilar métricas
     double *times_all = NULL;
