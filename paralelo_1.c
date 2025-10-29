@@ -138,7 +138,9 @@ static int write_file(const char *path, const unsigned char *buf, int len) {
 // bucle principal
 int main(int argc, char *argv[]){
     int N, id;
+    int search_bits = 24;  // Bits del espacio de búsqueda (default: 24)
     uint64_t upper = (1ULL<<24), lower = 0;
+    int upper_specified = 0;  // Flag para saber si -U fue especificado
     unsigned char *cipher = NULL; int ciphlen = 0;
     const char *arg_search = NULL;
     uint64_t chunk_size = (1ULL << 16); // Default: 65536
@@ -167,13 +169,25 @@ int main(int argc, char *argv[]){
             lower = strtoull(argv[++i], NULL, 0);
         } else if (!strcmp(argv[i], "-U") && i+1<argc){
             upper = strtoull(argv[++i], NULL, 0);
+            upper_specified = 1;
         } else if (!strcmp(argv[i], "-s") && i+1<argc){
             arg_search = argv[++i];
         } else if (!strcmp(argv[i], "-B") && i+1<argc){
             chunk_size = strtoull(argv[++i], NULL, 0);
-        } 
+        } else if (!strcmp(argv[i], "-b") && i+1<argc){
+            search_bits = atoi(argv[++i]);
+            if (search_bits < 1 || search_bits > 56) {
+                fprintf(stderr, "ERROR: -b debe estar entre 1 y 56 bits\n");
+                return 1;
+            }
+        }
     }
     if (arg_search) search = arg_search;
+
+    // Si no se especificó -U manualmente, usar el valor de -b
+    if (!upper_specified) {
+        upper = (1ULL << search_bits);
+    }
 
     // inicializa mpi y obtiene tamano y rank
     MPI_Init(NULL, NULL);
